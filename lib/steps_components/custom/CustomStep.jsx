@@ -8,11 +8,13 @@ class CustomStep extends Component {
     loading: true
   };
 
+  timer = null;
+
   componentDidMount() {
     const { speak, step, previousValue, triggerNextStep } = this.props;
     const { delay, waitAction } = step;
 
-    setTimeout(() => {
+    this.timer = setTimeout(() => {
       this.setState({ loading: false }, () => {
         if (!waitAction && !step.rendered) {
           triggerNextStep();
@@ -20,6 +22,10 @@ class CustomStep extends Component {
         speak(step, previousValue);
       });
     }, delay);
+  }
+
+  componentWillUnmount() {
+    if (this.timer) clearTimeout(this.timer);
   }
 
   renderComponent = () => {

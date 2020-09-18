@@ -20,6 +20,7 @@ import Recognition from './recognition';
 import { ChatIcon, CloseIcon, SubmitIcon, MicIcon } from './icons';
 import { isMobile } from './utils';
 import { speakFn } from './speechSynthesis';
+import { FREE_USER_STEP_ID, FREE_BOT_STEP_ID } from './constants';
 
 class ChatBot extends Component {
   /* istanbul ignore next */
@@ -45,13 +46,26 @@ class ChatBot extends Component {
       currentStep: {},
       previousStep: {},
       steps: {},
-      disabled: true,
+      disabled: !props.enableFreeInput,
       opened: props.opened || !props.floating,
       inputValue: '',
       inputInvalid: false,
       speaking: false,
       recognitionEnable: props.recognitionEnable && Recognition.isSupported(),
-      defaultUserSettings: {}
+      defaultUserSettings: {
+        delay: props.userDelay,
+        avatar: props.userAvatar,
+        hideInput: false,
+        hideExtraControl: false
+      },
+      defaultBotSettings: {
+        delay: props.botDelay,
+        avatar: props.botAvatar,
+        botName: props.botName
+      },
+      defaultCustomSettings: {
+        delay: props.customDelay
+      }
     };
 
     this.speak = speakFn(props.speechSynthesis);
@@ -59,51 +73,17 @@ class ChatBot extends Component {
 
   componentDidMount() {
     const { steps } = this.props;
-    const {
-      botDelay,
-      botAvatar,
-      botName,
-      cache,
-      cacheName,
-      customDelay,
-      enableMobileAutoFocus,
-      userAvatar,
-      userDelay
-    } = this.props;
-    const chatSteps = {};
+    const { cache, cacheName, enableMobileAutoFocus } = this.props;
+    const parsedSteps = this.getParsedSteps(steps);
 
-    const defaultBotSettings = { delay: botDelay, avatar: botAvatar, botName };
-    const defaultUserSettings = {
-      delay: userDelay,
-      avatar: userAvatar,
-      hideInput: false,
-      hideExtraControl: false
-    };
-    const defaultCustomSettings = { delay: customDelay };
-
-    for (let i = 0, len = steps.length; i < len; i += 1) {
-      const step = steps[i];
-      let settings = {};
-
-      if (step.user) {
-        settings = defaultUserSettings;
-      } else if (step.message || step.asMessage) {
-        settings = defaultBotSettings;
-      } else if (step.component) {
-        settings = defaultCustomSettings;
-      }
-
-      chatSteps[step.id] = Object.assign({}, settings, schema.parse(step));
-    }
-
-    schema.checkInvalidIds(chatSteps);
+    schema.checkInvalidIds(parsedSteps);
 
     const firstStep = steps[0];
 
     if (firstStep.message) {
       const { message } = firstStep;
       firstStep.message = typeof message === 'function' ? message() : message;
-      chatSteps[firstStep.id].message = firstStep.message;
+      parsedSteps[firstStep.id].message = firstStep.message;
     }
 
     const { recognitionEnable } = this.state;
@@ -130,7 +110,7 @@ class ChatBot extends Component {
         cacheName,
         cache,
         firstStep,
-        steps: chatSteps
+        steps: parsedSteps
       },
       () => {
         // focus input if last step cached is a user step
@@ -146,22 +126,23 @@ class ChatBot extends Component {
 
     this.setState({
       currentStep,
-      defaultUserSettings,
       previousStep,
       previousSteps,
       renderedSteps,
-      steps: chatSteps
+      steps: parsedSteps
     });
   }
 
   static getDerivedStateFromProps(props, state) {
     const { opened, toggleFloating } = props;
+
     if (toggleFloating !== undefined && opened !== undefined && opened !== state.opened) {
       return {
         ...state,
         opened
       };
     }
+
     return state;
   }
 
@@ -205,11 +186,12 @@ class ChatBot extends Component {
   };
 
   onValueChange = event => {
-    this.setState({ inputValue: event.target.value });
+    this.setState({ inputValue: event.target.value.replace(/\s+/g, ' ') });
   };
 
   getTriggeredStep = (trigger, value) => {
     const steps = this.generateRenderedStepsById();
+
     return typeof trigger === 'function' ? trigger({ value, steps }) : trigger;
   };
 
@@ -218,6 +200,7 @@ class ChatBot extends Component {
     const lastStepIndex = previousSteps.length > 0 ? previousSteps.length - 1 : 0;
     const steps = this.generateRenderedStepsById();
     const previousValue = previousSteps[lastStepIndex].value;
+
     return typeof message === 'function' ? message({ previousValue, steps }) : message;
   };
 
@@ -237,6 +220,30 @@ class ChatBot extends Component {
     }
 
     return steps;
+  };
+
+  getParsedSteps = steps => {
+    const { defaultUserSettings, defaultBotSettings, defaultCustomSettings } = this.state;
+    const parsedSteps = {};
+
+    if (!steps || !steps.length) return {};
+
+    for (let i = 0, len = steps.length; i < len; i += 1) {
+      const step = steps[i];
+      let settings = {};
+
+      if (step.user) {
+        settings = defaultUserSettings;
+      } else if (step.message || step.asMessage) {
+        settings = defaultBotSettings;
+      } else if (step.component) {
+        settings = defaultCustomSettings;
+      }
+
+      parsedSteps[step.id] = Object.assign({}, settings, schema.parse(step));
+    }
+
+    return parsedSteps;
   };
 
   triggerNextStep = data => {
@@ -263,26 +270,24 @@ class ChatBot extends Component {
       this.handleEnd();
     } else if (currentStep.options && data) {
       const option = currentStep.options.filter(o => o.value === data.value)[0];
-      const trigger = this.getTriggeredStep(option.trigger, currentStep.value);
+      const trigger = this.getTriggeredStep(
+        (option && option.trigger) || data.trigger,
+        currentStep.value
+      );
       delete currentStep.options;
 
       // replace choose option for user message
       currentStep = Object.assign({}, currentStep, option, defaultUserSettings, {
+        message: (option && option.label) || data.label || data.message,
         user: true,
-        message: option.label,
         trigger
       });
 
-      renderedSteps.pop();
-      previousSteps.pop();
-      renderedSteps.push(currentStep);
-      previousSteps.push(currentStep);
-
-      this.setState({
+      this.setState(pS => ({
         currentStep,
-        renderedSteps,
-        previousSteps
-      });
+        renderedSteps: [...pS.renderedSteps.slice(0, -1), currentStep],
+        previousSteps: [...pS.previousSteps.slice(0, -1), currentStep]
+      }));
     } else if (currentStep.trigger) {
       if (currentStep.replace) {
         renderedSteps.pop();
@@ -442,37 +447,148 @@ class ChatBot extends Component {
     this.submitUserMessage();
   };
 
+  handleFreeInput = () => {
+    const {
+      enableFreeInput,
+      defaultStep,
+      handleFreeInput,
+      responseDelay,
+      checkForQuickReply
+    } = this.props;
+    const { defaultUserSettings, defaultBotSettings, inputValue } = this.state;
+    let { currentStep } = this.state;
+
+    if (inputValue.length) {
+      // If current steps has quick replies and text entered by user matches with
+      // a reply - render that reply step
+      if (currentStep && currentStep.options && checkForQuickReply) {
+        const ipValue = inputValue.toLowerCase();
+        const option = currentStep.options.filter(o => {
+          try {
+            return (
+              o.label.toLowerCase().indexOf(ipValue) > -1 ||
+              o.value.toLowerCase().indexOf(ipValue) > -1
+            );
+          } catch (e) {
+            return false;
+          }
+        })[0];
+
+        if (option) {
+          const trigger = this.getTriggeredStep(option.trigger, currentStep.value);
+          delete currentStep.options;
+
+          currentStep = Object.assign({}, currentStep, defaultUserSettings, {
+            user: true,
+            message: option.label,
+            trigger
+          });
+
+          this.setState(pS => ({
+            currentStep,
+            inputValue: '',
+            renderedSteps: [...pS.renderedSteps.slice(0, -1), currentStep],
+            previousSteps: [...pS.previousSteps.slice(0, -1), currentStep]
+          }));
+
+          return;
+        }
+      }
+
+      // Handle input outside chatbot
+      if (enableFreeInput && defaultStep && typeof handleFreeInput === 'function') {
+        const randomId = Random(24);
+        const userStepId = `${FREE_USER_STEP_ID}_${randomId}`;
+        const botStepId = `${FREE_BOT_STEP_ID}_${randomId}`;
+
+        delete currentStep.options;
+
+        const userStep = Object.assign({}, defaultUserSettings, {
+          user: true,
+          key: userStepId,
+          id: userStepId,
+          trigger: botStepId,
+          delay: 0
+        });
+
+        const botStep = Object.assign({}, defaultBotSettings, {
+          key: botStepId,
+          id: botStepId,
+          message: '...',
+          delay: responseDelay,
+          replace: true
+        });
+
+        const userStepWithMsg = Object.assign({}, userStep, {
+          value: inputValue,
+          message: inputValue
+        });
+
+        this.setState(
+          pS => {
+            return {
+              disabled: true,
+              inputValue: '',
+              currentStep: userStep,
+              renderedSteps: [...pS.renderedSteps.slice(0, -1), userStepWithMsg],
+              previousSteps: [...pS.previousSteps.slice(0, -1), userStepWithMsg],
+              steps: Object.assign({}, pS.steps, { [userStepId]: userStep, [botStepId]: botStep })
+            };
+          },
+          () => {
+            handleFreeInput(inputValue, data => {
+              const trigger = (data && data.trigger) || defaultStep;
+              const newSteps = data && data.steps && this.getParsedSteps(data.steps);
+
+              this.setState(
+                pS => ({ steps: Object.assign({}, pS.steps, newSteps), disabled: false }),
+                () => {
+                  const { steps } = this.state;
+
+                  if (steps[trigger]) {
+                    this.triggerNextStep({ trigger });
+                  } else if (steps[defaultStep]) {
+                    this.triggerNextStep({ trigger: defaultStep });
+                  }
+                }
+              );
+            });
+          }
+        );
+      }
+    }
+  };
+
   submitUserMessage = () => {
+    const { enableFreeInput } = this.props;
     const { defaultUserSettings, inputValue, previousSteps, renderedSteps } = this.state;
     let { currentStep } = this.state;
 
-    const isInvalid = currentStep.validator && this.checkInvalidInput();
+    if (currentStep.user && !currentStep.id.startsWith(FREE_USER_STEP_ID)) {
+      const isInvalid = currentStep.validator && this.checkInvalidInput();
 
-    if (!isInvalid) {
-      const step = {
-        message: inputValue,
-        value: inputValue
-      };
+      if (!isInvalid) {
+        const step = { message: inputValue, value: inputValue };
 
-      currentStep = Object.assign({}, defaultUserSettings, currentStep, step);
+        currentStep = Object.assign({}, defaultUserSettings, currentStep, step);
 
-      renderedSteps.push(currentStep);
-      previousSteps.push(currentStep);
-
-      this.setState(
-        {
-          currentStep,
-          renderedSteps,
-          previousSteps,
-          disabled: true,
-          inputValue: ''
-        },
-        () => {
-          if (this.input) {
-            this.input.blur();
+        this.setState(
+          {
+            currentStep,
+            renderedSteps: [...renderedSteps, currentStep],
+            previousSteps: [...previousSteps, currentStep],
+            disabled: !enableFreeInput,
+            inputValue: ''
+          },
+          () => {
+            if (this.input && !enableFreeInput) {
+              this.input.blur();
+            }
           }
-        }
-      );
+        );
+      }
+    } else {
+      this.handleFreeInput();
     }
   };
 
@@ -772,7 +888,13 @@ ChatBot.propTypes = {
   submitButtonStyle: PropTypes.objectOf(PropTypes.any),
   userAvatar: PropTypes.string,
   userDelay: PropTypes.number,
-  width: PropTypes.string
+  width: PropTypes.string,
+
+  checkForQuickReply: PropTypes.bool,
+  defaultStep: PropTypes.string,
+  enableFreeInput: PropTypes.bool,
+  handleFreeInput: PropTypes.func,
+  responseDelay: PropTypes.number
 };
 
 ChatBot.defaultProps = {
@@ -823,7 +945,13 @@ ChatBot.defaultProps = {
   botAvatar:
     "data:image/svg+xml,%3csvg version='1' xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3e%3cpath d='M303 70a47 47 0 1 0-70 40v84h46v-84c14-8 24-23 24-40z' fill='%2393c7ef'/%3e%3cpath d='M256 23v171h23v-84a47 47 0 0 0-23-87z' fill='%235a8bb0'/%3e%3cpath fill='%2393c7ef' d='M0 240h248v124H0z'/%3e%3cpath fill='%235a8bb0' d='M264 240h248v124H264z'/%3e%3cpath fill='%2393c7ef' d='M186 365h140v124H186z'/%3e%3cpath fill='%235a8bb0' d='M256 365h70v124h-70z'/%3e%3cpath fill='%23cce9f9' d='M47 163h419v279H47z'/%3e%3cpath fill='%2393c7ef' d='M256 163h209v279H256z'/%3e%3cpath d='M194 272a31 31 0 0 1-62 0c0-18 14-32 31-32s31 14 31 32z' fill='%233c5d76'/%3e%3cpath d='M380 272a31 31 0 0 1-62 0c0-18 14-32 31-32s31 14 31 32z' fill='%231e2e3b'/%3e%3cpath d='M186 349a70 70 0 1 0 140 0H186z' fill='%233c5d76'/%3e%3cpath d='M256 349v70c39 0 70-31 70-70h-70z' fill='%231e2e3b'/%3e%3c/svg%3e",
   userAvatar:
-    "data:image/svg+xml,%3csvg viewBox='-208.5 21 100 100' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'%3e%3ccircle cx='-158.5' cy='71' fill='%23F5EEE5' r='50'/%3e%3cdefs%3e%3ccircle cx='-158.5' cy='71' id='a' r='50'/%3e%3c/defs%3e%3cclipPath id='b'%3e%3cuse overflow='visible' xlink:href='%23a'/%3e%3c/clipPath%3e%3cpath clip-path='url(%23b)' d='M-108.5 121v-14s-21.2-4.9-28-6.7c-2.5-.7-7-3.3-7-12V82h-30v6.3c0 8.7-4.5 11.3-7 12-6.8 1.9-28.1 7.3-28.1 6.7v14h100.1z' fill='%23E6C19C'/%3e%3cg clip-path='url(%23b)'%3e%3cdefs%3e%3cpath d='M-108.5 121v-14s-21.2-4.9-28-6.7c-2.5-.7-7-3.3-7-12V82h-30v6.3c0 8.7-4.5 11.3-7 12-6.8 1.9-28.1 7.3-28.1 6.7v14h100.1z' id='c'/%3e%3c/defs%3e%3cclipPath id='d'%3e%3cuse overflow='visible' xlink:href='%23c'/%3e%3c/clipPath%3e%3cpath clip-path='url(%23d)' d='M-158.5 100.1c12.7 0 23-18.6 23-34.4 0-16.2-10.3-24.7-23-24.7s-23 8.5-23 24.7c0 15.8 10.3 34.4 23 34.4z' fill='%23D4B08C'/%3e%3c/g%3e%3cpath d='M-158.5 96c12.7 0 23-16.3 23-31 0-15.1-10.3-23-23-23s-23 7.9-23 23c0 14.7 10.3 31 23 31z' fill='%23F2CEA5'/%3e%3c/svg%3e"
+    "data:image/svg+xml,%3csvg viewBox='-208.5 21 100 100' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'%3e%3ccircle cx='-158.5' cy='71' fill='%23F5EEE5' r='50'/%3e%3cdefs%3e%3ccircle cx='-158.5' cy='71' id='a' r='50'/%3e%3c/defs%3e%3cclipPath id='b'%3e%3cuse overflow='visible' xlink:href='%23a'/%3e%3c/clipPath%3e%3cpath clip-path='url(%23b)' d='M-108.5 121v-14s-21.2-4.9-28-6.7c-2.5-.7-7-3.3-7-12V82h-30v6.3c0 8.7-4.5 11.3-7 12-6.8 1.9-28.1 7.3-28.1 6.7v14h100.1z' fill='%23E6C19C'/%3e%3cg clip-path='url(%23b)'%3e%3cdefs%3e%3cpath d='M-108.5 121v-14s-21.2-4.9-28-6.7c-2.5-.7-7-3.3-7-12V82h-30v6.3c0 8.7-4.5 11.3-7 12-6.8 1.9-28.1 7.3-28.1 6.7v14h100.1z' id='c'/%3e%3c/defs%3e%3cclipPath id='d'%3e%3cuse overflow='visible' xlink:href='%23c'/%3e%3c/clipPath%3e%3cpath clip-path='url(%23d)' d='M-158.5 100.1c12.7 0 23-18.6 23-34.4 0-16.2-10.3-24.7-23-24.7s-23 8.5-23 24.7c0 15.8 10.3 34.4 23 34.4z' fill='%23D4B08C'/%3e%3c/g%3e%3cpath d='M-158.5 96c12.7 0 23-16.3 23-31 0-15.1-10.3-23-23-23s-23 7.9-23 23c0 14.7 10.3 31 23 31z' fill='%23F2CEA5'/%3e%3c/svg%3e",
+
+  checkForQuickReply: false,
+  defaultStep: undefined,
+  enableFreeInput: false,
+  handleFreeInput: undefined,
+  responseDelay: 3000
 };
 
 export default ChatBot;

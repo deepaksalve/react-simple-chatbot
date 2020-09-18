@@ -12,12 +12,14 @@ class TextStep extends Component {
     loading: true
   };
 
+  timer = null;
+
   componentDidMount() {
     const { step, speak, previousValue, triggerNextStep } = this.props;
     const { component, delay, waitAction } = step;
     const isComponentWatingUser = component && waitAction;
 
-    setTimeout(() => {
+    this.timer = setTimeout(() => {
       this.setState({ loading: false }, () => {
         if (!isComponentWatingUser && !step.rendered) {
           triggerNextStep();
@@ -25,6 +27,10 @@ class TextStep extends Component {
         speak(step, previousValue);
       });
     }, delay);
+  }
+
+  componentWillUnmount() {
+    if (this.timer) clearTimeout(this.timer);
   }
 
   getMessage = () => {
@@ -36,7 +42,7 @@ class TextStep extends Component {
 
   renderMessage = () => {
     const { step, steps, previousStep, triggerNextStep } = this.props;
-    const { component } = step;
+    const { component, asHtml } = step;
 
     if (component) {
       return React.cloneElement(component, {
@@ -45,6 +51,10 @@ class TextStep extends Component {
         previousStep,
         triggerNextStep
       });
+    }
+
+    if (asHtml) {
+      return <span dangerouslySetInnerHTML={{ __html: this.getMessage() }} />
     }
 
     return this.getMessage();
